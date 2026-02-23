@@ -22,6 +22,7 @@ public class Transaction {
                        Instant timestamp) {
         Validator.validateAmount(amount);
         Validator.validateType(type);
+        Validator.validateUserId(userId);
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
@@ -48,6 +49,12 @@ public class Transaction {
         static void validateType(String type) {
             if (type == null) {
                 throw new IllegalArgumentException("type is required");
+            }
+        }
+
+        static void validateUserId(String userId) {
+            if (userId == null || userId.isBlank()) {
+                throw new IllegalArgumentException("userId is required");
             }
         }
     }
