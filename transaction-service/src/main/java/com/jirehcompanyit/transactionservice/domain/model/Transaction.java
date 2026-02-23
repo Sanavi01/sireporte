@@ -20,9 +20,10 @@ public class Transaction {
                        String currency,
                        String category,
                        Instant timestamp) {
-        Validator.validateAmount(amount);
-        Validator.validateType(type);
+        // validate in logical parameter order: userId, type, amount
         Validator.validateUserId(userId);
+        Validator.validateType(type);
+        Validator.validateAmount(amount);
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
@@ -40,21 +41,25 @@ public class Transaction {
     private static final class Validator {
         private Validator() { }
 
+        private static final String ERR_AMOUNT = "amount must be > 0";
+        private static final String ERR_TYPE = "type is required";
+        private static final String ERR_USERID = "userId is required";
+
         static void validateAmount(BigDecimal amount) {
             if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new IllegalArgumentException("amount must be > 0");
+                throw new IllegalArgumentException(ERR_AMOUNT);
             }
         }
 
         static void validateType(String type) {
             if (type == null) {
-                throw new IllegalArgumentException("type is required");
+                throw new IllegalArgumentException(ERR_TYPE);
             }
         }
 
         static void validateUserId(String userId) {
             if (userId == null || userId.isBlank()) {
-                throw new IllegalArgumentException("userId is required");
+                throw new IllegalArgumentException(ERR_USERID);
             }
         }
     }
