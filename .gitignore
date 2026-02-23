@@ -1,0 +1,165 @@
+# .gitignore para proyecto "sireporte"
+# Configurado para: React (Node) frontend + Java/Spring Boot (Gradle) backend
+# Entorno de desarrollo: Windows, VSCode e IntelliJ
+
+########################################
+# Sistema operativo
+########################################
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+########################################
+# Logs y reportes
+########################################
+logs/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+########################################
+# Node / React
+########################################
+# dependencias
+node_modules/
+
+# caches y artefactos de build
+dist/
+.cache/
+.parcel-cache/
+.next/
+.out/
+.vite/
+.expo/
+coverage/
+
+# npm cache
+.npm/
+
+# yarn/pnpm cache/metadata
+.yarn/*
+.pnp.*
+
+# No ignorar los lockfiles: conviene versionarlos para reproducibilidad
+# (package-lock.json, yarn.lock, pnpm-lock.yaml) -- no listados aquí
+
+# archivos de entorno (contienen secretos)
+.env
+.env.*
+
+########################################
+# Java / Gradle / Spring Boot
+########################################
+# Gradle
+.gradle/
+
+# Gradle wrapper jar (si desea ignorarlo, descomentar):
+# gradle/wrapper/gradle-wrapper.jar
+
+# IDE / compilados
+*.class
+*.jar
+*.war
+*.ear
+
+# Maven (por si acaso hay módulos maven)
+target/
+
+########################################
+# IDEs y editores
+########################################
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains / IntelliJ IDEA
+.idea/
+*.iml
+
+# Otros editores
+*.sublime-workspace
+*.sublime-project
+
+########################################
+# Sistema de construcción y artefactos
+########################################
+out/
+release/
+
+########################################
+# Lenguajes adicionales / binaries
+########################################
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+
+# .NET
+bin/
+obj/
+TestResults/
+
+# Go
+/bin/
+/pkg/
+
+# Rust
+/target/
+
+# C/C++
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+
+########################################
+# Archivos de configuración / secretos
+########################################
+*.pem
+*.key
+*.crt
+*.p12
+secrets.env
+
+########################################
+# Bases de datos y caches
+########################################
+*.sqlite3
+*.db
+
+########################################
+# Archivos temporales / backups
+########################################
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+
+########################################
+# Patrones globales de directorios de build
+# (ignora builds en submódulos también)
+########################################
+**/build/
+**/out/
+**/target/
+
+# Fin del archivo
