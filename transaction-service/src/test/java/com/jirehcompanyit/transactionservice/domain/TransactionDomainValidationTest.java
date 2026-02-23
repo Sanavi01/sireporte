@@ -80,4 +80,25 @@ public class TransactionDomainValidationTest {
         assertEquals(userId, tx.getUserId());
         log.info("[Then] Transaction created successfully with id={}", tx.getId());
     }
+    
+    @Test
+    void constructingTransaction_withMissingUserId_shouldThrow() {
+        // Given
+        String userId = null;
+        String type = "DEBIT";
+        BigDecimal amount = new BigDecimal("10.00");
+        String currency = "COP";
+        String category = "GROCERIES";
+        Instant timestamp = Instant.parse("2026-02-22T17:00:00Z");
+
+        log.info("[Given] userId=null, type={}, amount={}, currency={}, category={}, timestamp={}",
+                type, amount, currency, category, timestamp);
+
+        // When / Then
+        log.info("[When] constructing Transaction with missing userId expecting IllegalArgumentException");
+        assertThrows(IllegalArgumentException.class, () -> {
+            new Transaction(userId, type, amount, currency, category, timestamp);
+        });
+        log.info("[Then] IllegalArgumentException was thrown as expected for missing userId");
+    }
 }
