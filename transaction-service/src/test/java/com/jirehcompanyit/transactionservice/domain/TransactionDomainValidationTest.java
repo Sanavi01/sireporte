@@ -2,6 +2,8 @@ package com.jirehcompanyit.transactionservice.domain;
 
 import com.jirehcompanyit.transactionservice.domain.model.Transaction;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -9,6 +11,8 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class TransactionDomainValidationTest {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactionDomainValidationTest.class);
 
     @Test
     void constructingTransaction_withZeroAmount_shouldThrow() {
@@ -20,9 +24,14 @@ public class TransactionDomainValidationTest {
         String category = "GROCERIES";
         Instant timestamp = Instant.parse("2026-02-22T17:00:00Z");
 
+        log.info("[Given] userId={}, type={}, amount={}, currency={}, category={}, timestamp={}",
+                userId, type, amount, currency, category, timestamp);
+
         // When / Then
+        log.info("[When] constructing Transaction with amount=0 expecting IllegalArgumentException");
         assertThrows(IllegalArgumentException.class, () -> {
             new Transaction(userId, type, amount, currency, category, timestamp);
         });
+        log.info("[Then] IllegalArgumentException was thrown as expected");
     }
 }

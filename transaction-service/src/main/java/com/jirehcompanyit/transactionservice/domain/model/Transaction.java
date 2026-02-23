@@ -20,9 +20,7 @@ public class Transaction {
                        String currency,
                        String category,
                        Instant timestamp) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("amount must be > 0");
-        }
+        validateAmount(amount);
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
@@ -30,6 +28,12 @@ public class Transaction {
         this.currency = currency;
         this.category = category;
         this.timestamp = timestamp;
+    }
+
+    private static void validateAmount(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("amount must be > 0");
+        }
     }
 
     public UUID getId() {
