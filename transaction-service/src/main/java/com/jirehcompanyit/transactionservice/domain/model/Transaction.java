@@ -20,6 +20,9 @@ public class Transaction {
                        String currency,
                        String category,
                        Instant timestamp) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("amount must be > 0");
+        }
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
