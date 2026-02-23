@@ -20,8 +20,8 @@ public class Transaction {
                        String currency,
                        String category,
                        Instant timestamp) {
-        validateAmount(amount);
-        validateType(type);
+        Validator.validateAmount(amount);
+        Validator.validateType(type);
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
@@ -31,15 +31,24 @@ public class Transaction {
         this.timestamp = timestamp;
     }
 
-    private static void validateAmount(BigDecimal amount) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("amount must be > 0");
-        }
-    }
+    /**
+     * Internal validator for domain invariants. Kept private to the domain model.
+     * Extracted to a nested class to improve readability and make future
+     * validation rules easier to extend without changing constructor flow.
+     */
+    private static final class Validator {
+        private Validator() { }
 
-    private static void validateType(String type) {
-        if (type == null) {
-            throw new IllegalArgumentException("type is required");
+        static void validateAmount(BigDecimal amount) {
+            if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("amount must be > 0");
+            }
+        }
+
+        static void validateType(String type) {
+            if (type == null) {
+                throw new IllegalArgumentException("type is required");
+            }
         }
     }
 
