@@ -1,273 +1,216 @@
 # TEST_PLAN.md
 
 ## 1. Overview
-- **User Story Summary:** Este microservicio expone dos capacidades principales: creación de transacciones (POST /transactions) con idempotencia por `Idempotency-Key` y normalización UTC, y consulta paginada por rango de fechas del historial de un usuario (GET /transactions?userId&from&to&page&size) con límite de 6 meses y tamaño de página máximo 10. (Fuentes: HU-TRANSACTION-01, HU-TRANSACTION-02).
-- **Brownfield Risk Analysis:** Código existente sigue Hexagonal Architecture; riesgos típicos incluyen dependencias ocultas en infra (repositorios, store de idempotencia), efectos laterales en la base de datos (transacciones duplicadas), y falta de contratos de integración (fechas/zonas). Idempotencia y normalización de zonas horarias son puntos de mayor riesgo; la persistencia y el TTL del store (Redis) pueden introducir condiciones de carrera o fallos que causen inconsistencias financieras.
+- **User Story Summary:**
+  - HU-TRANSACTION-01: Crear transacciones (API POST /transactions). Requisitos: validar invariantes de dominio, persistir la transacción y devolver identificador.
+  - HU-TRANSACTION-02: Consultar transacciones (API GET /transactions y GET /transactions/{id}). Requisitos: filtrar por userId y rango de fechas, obtener detalle por id.
+- **Architectural Implications:** Hexagonal architecture — las pruebas deben separar Domain, Application (use-cases), Persistence (adapters) e Integration (controllers). Domain es puro Java sin Spring; infraestructura implementa puertos.
+- **Brownfield Risk Analysis:**
+  - Hidden dependencies: repositorios JPA en infraestructura que podrían exponer detalles si se usan en pruebas de dominio.
+  - Side effects: persistencia real en DB; usar dobles (mocks/fakes) para unit tests.
+  - Shared mutable state: base de datos entre tests; usar limpieza o Testcontainers para aislamiento.
+  - External integrations: (a futuro) RabbitMQ; no se ejecuta en estas historias.
 
-## 2. Applied Testing Principles
-- **Principle Identified:** Fall-Forward Testing (Test the boundaries and failure modes that most impact money/consistency).
-- **Justification:** En sistemas financieros, detectar errores en límites (importe = 0, rango de fecha límite de 6 meses, idempotencia) y fallos de infra es crítico; priorizar pruebas que eviten duplicados y pérdidas.
+## 2. Architectural Test Classification
+- **Domain (Business Logic):** Validación de invariantes: amount > 0, type != null, userId presente, reglas de categoría/timestamp.
+- **Application / Use Case:** `CreateTransactionUseCase` — orquestación, idempotencia, conversión domain↔entity.
+- **Persistence:** Mappers, JPA Entity, Repository implementation (adapters/out).
+- **Integration:** REST Controller endpoints, request/response mapping, status codes.
+- **Cross-cutting:** Input validation (DTO), idempotency, error handling, logging, concurrency.
 
-## 3. Test Levels Strategy
-### Unit Testing
-- Validación de invariantes de dominio: `amount > 0`, enums `type/currency/category`, timestamp parsing/normalización.
-- Lógica de negocio del UseCase: comportamiento de creación (generación de id, mapeos) y de consulta (cálculo de ventanas por defecto, límites de rango, paginación).
-- Manejo de resultados de la capa de idempotencia (existente/no existente) mediante mocks.
+Lower layers (Domain → Application → Persistence → Integration) must estabilizarse primero porque cada capa depende de contratos y comportamientos de la capa inferior.
 
-### Integration Testing
-- Controller → UseCase → Repository adapters con una base de datos embebida o Testcontainers PostgreSQL.
-- Idempotency store simulada (Redis real o stub compatible) para validar TTL y atomicidad.
-- Tests de contratos JSON y códigos HTTP (201,200,400,503) con Spring Boot Test slices.
+## 3. Formal Test Space Modeling
 
-### System Testing
-- Pruebas end-to-end con Postgres y Redis reales (docker-compose/Testcontainers): crear transacciones, reintentos idempotentes, queries paginadas y límites temporales.
-- Pruebas de resiliencia: simular timeouts DB/Redis y validar 503 y logs/metrics.
+### 3.1 Equivalence Partitioning
+- **Domain: Crear Transacción**
+  - Válidas:
+    - `amount` > 0, `type` ∈ {DEBIT, CREDIT}, `userId` presente, `timestamp` válido.
+  - Inválidas:
+    - `amount` == 0
+    - `amount` < 0
+    - `type` null o valor inválido
+    - `userId` ausente o vacío
+  - Mapeo a casos de prueba:
+    - Caso válido estándar (amount = 100.00, type = CREDIT, userId = U1)
+    - Caso amount == 0 → rechazo
+    - Caso amount negativo → rechazo
+    - Caso type null → rechazo
+    - Caso userId vacío → rechazo
 
-## 4. Test Design Application
+### 3.2 Boundary Value Analysis
+- **Numeric boundaries (amount):**
+  - Límite inferior: 0 (invalido)
+  - Valores críticos: 0, 0.01 (mínimo aceptable), 1.00
+  - Casos: amount = 0 (n-), amount = 0.01 (n), amount = large (p.ej. 10_000_000)
+- **Length / presence boundaries:**
+  - `userId` length: vacío (invalido), 1 char (válido), 255 chars (válido)
 
-### 4.1 Equivalence Partitioning
-- Campos de entrada principales y particiones válidas / inválidas:
-  - `amount`: Válidos: (0.01..∞) ; Inválidos: (≤ 0), NaN/formato no decimal, escala > 2.
-  - `type`: Válidos: {DEBIT, CREDIT} ; Inválidos: cualquier otro string o null.
-  - `currency`: Válidos: {COP, USD} ; Inválidos: otras monedas o null.
-  - `category`: Válidos: listado autorizado ; Inválidos: valores fuera del enum o null.
-  - `timestamp`: Válidos: ISO-8601 con zona ; Inválidos: formatos no ISO, strings vacíos.
-  - `Idempotency-Key` header: Válidos: no vacío ; Inválidos: ausente o vacío.
-  - `size` (query): Válidos: 1..10 ; Inválidos: ≤0, >10, no integer.
-  - `date range`: Válidos: intervalos ≤ 6 meses ; Inválidos: intervalos > 6 meses.
+### 3.3 Decision Table (Create Transaction validations)
 
-Mapeo a escenarios: Cada partición genera al menos un escenario Gherkin (ver Sección 5, grupo Equivalence Partitioning).
+Conditions:
+- C1: `amount` > 0
+- C2: `type` presente y válido
+- C3: `userId` presente
 
-### 4.2 Boundary Value Analysis
-- Límites identificados:
-  - `amount` borde inferior: 0 (invalid), 0.01 (valid). Probar -0.01 como negativo.
-  - `size`: 1 (min), 10 (max), 11 (invalid).
-  - Fecha límite de rango: exactamente 6 meses (valid), 6 months + 1 day (invalid). Probar `from = 2025-08-01T00:00:00Z`, `to = 2026-02-01T00:00:00Z` (6 meses si se cuenta inclusive según reglas) y `to = 2026-02-02T00:00:00Z` (excede).
-  - Idempotency TTL: reenvío dentro de 24h (duplicate behavior), reenvío después de 24h (create new).
+Actions:
+- A1: Aceptar y persistir
+- A2: Rechazar con error de validación (400/DomainViolation)
 
-Mapeo a escenarios: Sección 5, grupo Boundary Value contiene escenarios que utilizan n-1, n, n+1 para los límites mencionados.
+Decision table (imposibles eliminados):
 
-### 4.3 Decision Table
-- Condiciones relevantes para la creación:
-  - C1: `Idempotency-Key` presente? (Y/N)
-  - C2: Payload válido (amount>0, enums válidos)? (Y/N)
-  - C3: Idempotency store contiene (userId, key)? (Y/N)
+| C1 | C2 | C3 | Acción |
+|----|----|----|--------|
+| Y  | Y  | Y  | A1     |
+| N  | Y  | Y  | A2     |
+| Y  | N  | Y  | A2     |
+| Y  | Y  | N  | A2     |
+| N  | N  | N  | A2     |
 
-- Acciones:
-  - A1: Persistir nueva transacción y devolver 201.
-  - A2: Devolver representación almacenada (200) sin persistir.
-  - A3: Rechazar con 400 (validación).
-  - A4: Devolver 503 si store/DB indeterminado.
 
-- Tabla simplificada (combinaciones relevantes):
-  1) C1=Y, C2=Y, C3=N => A1
-  2) C1=Y, C2=Y, C3=Y => A2
-  3) C1=Y, C2=N, C3=X => A3
-  4) C1=N, C2=Y => A3 (Idempotency header obligatorio)
-  5) C1=Y, C2=Y, C3=ERR(store) => A4
+## 4. Evolutionary TDD Execution Plan
 
-Cada combinación se convierte a escenarios Gherkin en Sección 5 (Decision Table group).
+PHASE 1 — Domain Unit Scenarios
+- Scenarios:
+  - Validar que `Transaction` rechaza `amount <= 0`.
+  - Validar que `Transaction` rechaza `type` null.
+  - Validar que `Transaction` requiere `userId`.
+Justification: Las invariantes de negocio deben ser firmes antes de orquestación.
+
+PHASE 2 — Application / Use Case Scenarios
+- Scenarios:
+  - `CreateTransactionUseCase` crea dominio y llama al puerto `TransactionRepository`.
+  - Idempotencia: reintento con mismo client-generated idempotency-key produce no duplicados.
+Justification: Use cases dependen de domain estable y contratos de repositorio.
+
+PHASE 3 — Persistence Scenarios
+- Scenarios:
+  - Mapeo Domain↔Entity: todos los campos mapeados correctamente.
+  - Repositorio JPA persiste y recupera entity.
+Justification: Confirma que el adaptador cumple el puerto de dominio.
+
+PHASE 4 — Integration / System Scenarios
+- Scenarios:
+  - Controller POST /transactions: 201 con body correcto.
+  - Controller POST /transactions: 400 para payload inválido.
+  - GET /transactions?userId=&from=&to= devuelve filtrado correcto.
+Justification: Solo cuando Application y Persistence estén estables.
+
+PHASE 5 — Advanced / Non-Functional Concerns
+- Scenarios:
+  - Concurrency: múltiples solicitudes concurrentes con misma idempotency-key no generan duplicados.
+  - Performance: latencia de creación aceptable bajo carga (smoke).
+
+Reglas TDD estrictas aplicadas:
+- Implementar una única prueba en rojo a la vez.
+- Hacerla verde con la implementación mínima.
+- Refactorizar antes de pasar al siguiente escenario.
 
 ## 5. Gherkin Scenarios
 
-Feature: Transaction Management API
-  Description: Creación de transacciones con idempotencia y consulta de transacciones por rango de fechas paginado.
+Feature: Gestión de Transacciones
+  Como sistema de transacciones
+  Quiero crear y consultar transacciones respetando las reglas de negocio
+  Para mantener integridad y posibilidad de reporte
 
-  Background:
-    Given the transaction service is running
-    And the transactions database is reachable
-    And the idempotency store (Redis) is reachable
+  # Phase 1 — Domain — Equivalence Partitioning
+  Scenario: [Phase 1][EP] Crear transacción válida en dominio
+    Given un conjunto de datos válidos: amount=100.00, type=CREDIT, userId="user-123", timestamp válido
+    When se construye la entidad de dominio `Transaction`
+    Then la instancia se crea sin excepciones y mantiene los valores
 
-  # Equivalence Partitioning Scenarios
-  # Cada escenario mapea a un Acceptance Criterion FR-TRANSACTION-01-XX / FR-TRANSACTION-02-XX
+  Scenario: [Phase 1][EP] Rechazo por amount igual a cero
+    Given amount=0.00, type=DEBIT, userId="user-123"
+    When se intenta crear la entidad de dominio `Transaction`
+    Then se lanza una excepción de validación indicando "amount must be positive"
 
-  Scenario: Crear transacción válida (partición válida)
-    Given a POST /transactions with body { userId: "u-1", type: "DEBIT", amount: 100.00, currency: "COP", category: "GROCERIES", timestamp: "2026-02-22T12:00:00-05:00" }
-    And header Idempotency-Key: "abc123"
-    When the request is processed
-    Then response status is 201 Created
-    And response body contains id (UUID) and timestamp normalized to UTC
-    And the transaction is persisted
-    # Trace: FR-TRANSACTION-01-01, FR-TRANSACTION-01-02, FR-TRANSACTION-01-03
+  Scenario: [Phase 1][BVA] Boundary: amount mínimo aceptable
+    Given amount=0.01, type=DEBIT, userId="user-123"
+    When se crea la entidad de dominio `Transaction`
+    Then la creación es exitosa
 
-  Scenario: Crear transacción con amount cero (partición inválida)
-    Given a POST /transactions with body { userId: "u-1", type: "DEBIT", amount: 0.00, currency: "COP", category: "GROCERIES", timestamp: "2026-02-22T12:00:00Z" }
-    And header Idempotency-Key: "key-zero"
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "amount must be > 0"
-    # Trace: FR-TRANSACTION-01-07
+  Scenario: [Phase 1][EP] Rechazo por tipo nulo
+    Given type=null, amount=10.00, userId="user-123"
+    When se crea la entidad de dominio `Transaction`
+    Then se lanza una excepción de validación indicando "type is required"
 
-  Scenario: Crear transacción con tipo inválido (partición inválida)
-    Given a POST /transactions with body { userId: "u-1", type: "INVALID", amount: 10.00, currency: "COP", category: "GROCERIES", timestamp: "2026-02-22T12:00:00Z" }
-    And header Idempotency-Key: "key-type"
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "type must be one of [DEBIT, CREDIT]"
-    # Trace: FR-TRANSACTION-01-04
+  # Phase 2 — Application / Use Case — Decision Table
+  Scenario: [Phase 2][DT] CreateTransactionUseCase acepta cuando todas las condiciones son verdaderas
+    Given un DTO válido para crear transacción
+    And el puerto `TransactionRepository` es un mock que devuelve success
+    When se ejecuta `CreateTransactionUseCase.handle(dto)`
+    Then el puerto `save` es invocado con una entidad de dominio válida
+    And la respuesta contiene `transactionId` y status CREATED
 
-  Scenario: Consulta transacciones por defecto (sin from/to) (partición válida)
-    Given a GET /transactions?userId=u-1
-    When the request is processed
-    Then response status is 200 OK
-    And response contains page=1,size=10 and items[] sorted by timestamp DESC
-    # Trace: FR-TRANSACTION-02-04, FR-TRANSACTION-02-05, FR-TRANSACTION-02-07
+  Scenario: [Phase 2][DT] CreateTransactionUseCase rechaza cuando amount <= 0
+    Given un DTO con amount=0.00
+    When se ejecuta `CreateTransactionUseCase.handle(dto)`
+    Then se devuelve un error de validación y no se invoca `save`
 
-  Scenario: Consulta con size excedido (partición inválida)
-    Given a GET /transactions?userId=u-1&size=20
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "size must be <= 10"
-    # Trace: FR-TRANSACTION-02-03
+  Scenario: [Phase 2][IDEMP] Idempotencia en el caso feliz
+    Given un request con `idempotency-key=abc-123`
+    And el primer intento crea una transacción con id T1
+    When se reenvía el mismo request con `idempotency-key=abc-123`
+    Then la segunda llamada no crea una nueva transacción
+    And la respuesta referencia `T1`
 
-  # Boundary Value Scenarios
+  # Phase 3 — Persistence — Mapping & Repository
+  Scenario: [Phase 3][Persistence] Mapeo Domain->Entity y persistencia roundtrip
+    Given una entidad de dominio válida
+    When se mapea a `TransactionEntity` y se persiste con JPA repository
+    Then al recuperar por id se obtiene una entidad mapeada al dominio con los mismos valores
 
-  Scenario: Amount justo por encima del límite (0.01) (BVA)
-    Given a POST /transactions with body { userId: "u-2", type: "CREDIT", amount: 0.01, currency: "USD", category: "INCOME", timestamp: "2026-02-22T00:00:00Z" }
-    And header Idempotency-Key: "bva-amount-1"
-    When the request is processed
-    Then response status is 201 Created
-    # Trace: Boundary amount n (0.01)
+  # Phase 4 — Integration — Controller
+  Scenario: [Phase 4][Integration] POST /transactions crea recurso (201)
+    Given un payload JSON válido
+    When se hace POST /transactions
+    Then el servicio responde 201 Created
+    And el body contiene `transactionId` y los datos persistidos
 
-  Scenario: Amount justo en límite inválido (0.00) (BVA)
-    Given a POST /transactions with body { userId: "u-2", type: "CREDIT", amount: 0.00, currency: "USD", category: "INCOME", timestamp: "2026-02-22T00:00:00Z" }
-    And header Idempotency-Key: "bva-amount-0"
-    When the request is processed
-    Then response status is 400 Bad Request
-    # Trace: Boundary amount n-1 (0.00)
+  Scenario: [Phase 4][Integration] POST /transactions retorna 400 para payload inválido
+    Given un payload JSON con amount=0
+    When se hace POST /transactions
+    Then el servicio responde 400 Bad Request con mensaje de validación
 
-  Scenario: Paginación size límite superior (size=10) (BVA)
-    Given a GET /transactions?userId=u-3&page=1&size=10
-    When the request is processed
-    Then response status is 200 OK
-    # Trace: Boundary size n (10)
+  Scenario: [Phase 4][Integration] GET /transactions filtra por userId y rango
+    Given varias transacciones persistidas para user-123 y user-999 en distintas fechas
+    When se hace GET /transactions?userId=user-123&from=2025-01-01&to=2025-12-31
+    Then la respuesta contiene solo las transacciones de user-123 en el rango
 
-  Scenario: Paginación size fuera del límite (size=11) (BVA)
-    Given a GET /transactions?userId=u-3&page=1&size=11
-    When the request is processed
-    Then response status is 400 Bad Request
-    # Trace: Boundary size n+1 (11)
+  # Phase 5 — Non-Functional
+  Scenario: [Phase 5][Concurrency] Concurrency: idempotency bajo carga
+    Given múltiples hilos/envíos concurrentes con la misma idempotency-key
+    When todas las solicitudes son procesadas simultáneamente
+    Then solo una transacción es creada y las demás reciben la referencia a esa transacción
 
-  Scenario: Date range exactamente 6 meses (BVA)
-    Given a GET /transactions?userId=u-4&from=2025-08-01T00:00:00Z&to=2026-02-01T00:00:00Z
-    When the request is processed
-    Then response status is 200 OK
-    # Trace: Boundary date-range n (6 months)
 
-  Scenario: Date range que excede 6 meses por un día (BVA)
-    Given a GET /transactions?userId=u-4&from=2025-08-01T00:00:00Z&to=2026-02-02T00:00:00Z
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "requested date range exceeds maximum allowed 6 months"
-    # Trace: Boundary date-range n+1
+## 6. TDD Alignment Strategy
+- **Primer escenario a implementar:** Phase 1 — Domain — "Rechazo por amount igual a cero".
+  - Razón: validar la invariante más crítica en el nivel más bajo; es rápido de ejecutar y no depende de infra.
+  - Tipo de fallo inicial esperado: aserción/exception de dominio (falla de compilación improbable si la clase existe).
 
-  Scenario: Idempotency replay dentro de 24h devuelve representación sin duplicar (BVA)
-    Given a POST /transactions with body { userId: "u-5", type: "DEBIT", amount: 50.00, currency: "COP", category: "BILLS", timestamp: "2026-02-22T10:00:00Z" }
-    And header Idempotency-Key: "replay-key"
-    When the first request is processed
-    Then response status is 201 Created
-    When the same POST with same Idempotency-Key is processed within 24 hours
-    Then response status is 200 OK
-    And no additional DB row is created
-    # Trace: FR-TRANSACTION-01-08
+- **Ejecución ordenada:**
+  1. Implementar el test domain (RED)
+  2. Implementar mínima lógica en `Transaction` para pasar (GREEN)
+  3. Refactorizar manteniendo tests (REFACTOR)
+  4. Implementar siguiente test domain y repetir hasta completar Phase 1
+  5. Avanzar a Phase 2, escribiendo un único use-case test en rojo y seguir la misma regla
 
-  Scenario: Idempotency replay después de 24h crea nuevo recurso (BVA)
-    Given a POST /transactions with body { userId: "u-5", type: "DEBIT", amount: 75.00, currency: "COP", category: "BILLS", timestamp: "2026-02-22T10:00:00Z" }
-    And header Idempotency-Key: "expired-key"
-    When the first request is processed
-    Then response status is 201 Created
-    When the same POST with same Idempotency-Key is processed after 24 hours
-    Then response status is 201 Created
-    And a new DB row is created
-    # Trace: Idempotency TTL behavior (NFR & assumptions)
+- **Mocking / aislamiento:**
+  - Domain tests: sin mocks, crear directamente instancias del domain model.
+  - Application tests: mockear puertos/outbound (`TransactionRepository`) con Mockito / Mockk.
+  - Persistence tests: usar Testcontainers Postgres o una base en memoria; limpiar esquema entre tests.
+  - Integration tests: arrancar Spring context slice o usar TestRestTemplate con profile de pruebas y DB aislada.
 
-  # Decision Table Scenarios
+- **Refactoring checkpoints:**
+  - Después de cada conjunto de tests de Domain pasar a verde y refactorizar antes de escribir tests Application.
+  - Añadir coverage minimal para mappers antes de integrar controller.
 
-  Scenario: DT1 - Crear cuando header presente, payload válido y clave no existente
-    Given a POST /transactions with valid body and Idempotency-Key "dt-1"
-    And idempotency store returns NOT_FOUND for (userId, "dt-1")
-    When the request is processed
-    Then the service persists the transaction and returns 201 Created
-    # Trace: C1=Y,C2=Y,C3=N -> A1
-
-  Scenario: DT2 - Repetición idempotente cuando clave existe
-    Given a POST /transactions with valid body and Idempotency-Key "dt-2"
-    And idempotency store returns stored representation for (userId, "dt-2")
-    When the request is processed
-    Then the service returns 200 OK with the stored representation and does not persist a new transaction
-    # Trace: C1=Y,C2=Y,C3=Y -> A2
-
-  Scenario: DT3 - Rechazo cuando payload inválido aun con header presente
-    Given a POST /transactions with body where amount = -10 and Idempotency-Key "dt-3"
-    When the request is processed
-    Then response status is 400 Bad Request
-    # Trace: C1=Y,C2=N -> A3
-
-  Scenario: DT4 - Rechazo cuando falta Idempotency-Key
-    Given a POST /transactions with valid body and no Idempotency-Key header
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message indicates Idempotency-Key is required
-    # Trace: C1=N,C2=Y -> A3
-
-  Scenario: DT5 - Indeterminate store error devuelve 503
-    Given a POST /transactions with valid body and Idempotency-Key "dt-err"
-    And idempotency store returns ERROR/UNAVAILABLE
-    When the request is processed
-    Then response status is 503 Service Unavailable
-    And logs/metrics indicate idempotency store failure
-    # Trace: C1=Y,C2=Y,C3=ERR -> A4
-
-  # Validation and Negative Scenarios (explicit)
-
-  Scenario: Missing required field userId on create
-    Given a POST /transactions with body missing userId
-    And header Idempotency-Key: "missing-user"
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "userId is required"
-    # Trace: FR-TRANSACTION-01-01, Acceptance negative
-
-  Scenario: Timestamp no ISO-8601 en creación
-    Given a POST /transactions with timestamp "22-02-2026 12:00"
-    And header Idempotency-Key: "bad-ts"
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "timestamp must be ISO-8601"
-    # Trace: FR-TRANSACTION-01-03
-
-  Scenario: Consulta con userId faltante
-    Given a GET /transactions with no userId parameter
-    When the request is processed
-    Then response status is 400 Bad Request
-    And error message contains "userId is required"
-    # Trace: FR-TRANSACTION-02-08
-
-  # Infrastructure failure scenarios
-
-  Scenario: DB timeout durante creación
-    Given a POST /transactions with valid body and Idempotency-Key "db-timeout"
-    And the database returns a timeout/connection error
-    When the request is processed
-    Then response status is 503 Service Unavailable
-    And a retryable hint is present in the response
-    # Trace: Negative - NFR for resiliency
-
-## 6. TDD Alignment
-- Tests to implement first (RED phase):
-  - Unit tests for domain validation (amount>0, enum parsing) and timestamp normalization.
-  - Unit tests for CreateTransactionUseCase handling of idempotency outcomes (NOT_FOUND -> persist, FOUND -> return stored).
-  - Integration test: POST /transactions happy path returning 201 with persisted record.
-- Mocking strategy:
-  - Mock repository (JPA adapter) and idempotency store for unit tests.
-  - Use Testcontainers/Postgres + an embedded Redis or Redis Testcontainer for integration tests that validate TTL and atomicity.
-- Isolation strategy:
-  - Keep domain tests pure (no Spring), test use cases with mocked ports.
-  - Controller tests as slice tests with mocked use cases for fast verification of HTTP mapping and validation.
-- Risk areas for regression:
-  - Idempotency logic (race conditions, TTL expiry handling).
-  - Timestamp parsing and timezone normalization (consistency in storage and responses).
-  - DB constraint enforcement for amount scale/precision.
+- **Regression risk areas:**
+  - Mapeadores Domain↔Entity
+  - Conversión de decimales/monedas y rounding
+  - Idempotency storage/locking
 
 ---
-Generated by QA Architect process from HU-TRANSACTION-01 and HU-TRANSACTION-02 and project context.
+
+Archivo generado para el microservicio: transaction-service
