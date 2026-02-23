@@ -21,6 +21,7 @@ public class Transaction {
                        String category,
                        Instant timestamp) {
         validateAmount(amount);
+        validateType(type);
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.type = type;
@@ -33,6 +34,12 @@ public class Transaction {
     private static void validateAmount(BigDecimal amount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("amount must be > 0");
+        }
+    }
+
+    private static void validateType(String type) {
+        if (type == null) {
+            throw new IllegalArgumentException("type is required");
         }
     }
 
